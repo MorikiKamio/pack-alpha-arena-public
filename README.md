@@ -1,5 +1,9 @@
 # Pack Alpha Concierge Vault
 
+<p align="center">
+  <img src="docs/assets/pack-alpha-banner.jpg" alt="Pack Alpha Concierge banner showing Pokemon cards, boxes, and Monad-styled vault UI" width="100%" />
+</p>
+
 Pack Alpha is a Monad hackathon project for AI-assisted Pokemon card procurement, cross-border vault custody, NFT-style ownership receipts, physical redemption, and marketplace resale.
 
 The product is not trying to pretend that Pokemon card liquidity already exists on Monad. Instead, it brings the real offchain Pokemon card market to Monad users: the agent finds regional opportunities across Japan, the US, Singapore, Hong Kong, Dubai, and Europe, routes purchases through a concierge flow, records user-approved actions on Monad, and lets the user manage vaulted inventory from a profile screen.
@@ -10,6 +14,12 @@ Live demo:
 - Concierge app: https://pack-alpha-arena.vercel.app/pack-alpha/app
 - Profile vault: https://pack-alpha-arena.vercel.app/pack-alpha/profile
 - Repository: https://github.com/MorikiKamio/pack-alpha-arena-public
+
+## UI Preview
+
+| Concierge app | Profile vault |
+| --- | --- |
+| <img src="docs/assets/pack-alpha-concierge-app.jpg" alt="Pack Alpha concierge app with picked-up Pokemon cards, regional price board, wallet connect, and Buy flow" width="100%" /> | <img src="docs/assets/pack-alpha-profile-vault.jpg" alt="Pack Alpha profile vault with owned Pokemon cards, tokenise and redeem actions, and sell options" width="100%" /> |
 
 ## Why This Exists
 
