@@ -104,6 +104,10 @@ Demo settlement token:
 
 - `contracts/DemoUSDC.sol`
 
+Vault receipt NFT:
+
+- `contracts/PackAlphaVaultReceiptNFT.sol`
+
 Main onchain actions exposed in the app:
 
 - `publishValuationRoot`
@@ -111,6 +115,7 @@ Main onchain actions exposed in the app:
 - `commitPrediction`
 - `commitDecision`
 - `recordTokenExecutionReceipt`
+- `mintReceipt`
 - `settleRound`
 - `updateAgentScore`
 - `settlePrediction`
@@ -127,6 +132,7 @@ Useful API endpoints:
 - `POST /api/pack-alpha/vault-actions`
 - `POST /api/pack-alpha/sell-actions`
 - `GET /api/pack-alpha/onchain/config`
+- `POST /api/pack-alpha/onchain/receipt-mint`
 - `GET /api/pack-alpha/onchain/demo-flow`
 
 ## Local Development
@@ -183,6 +189,7 @@ npm run deploy:pack-alpha:full-flow
 - `src/api/packAlphaOnchain.ts`: Monad config and calldata generation.
 - `contracts/PackAlphaArena.sol`: onchain receipt and settlement contract.
 - `contracts/DemoUSDC.sol`: demo settlement token.
+- `contracts/PackAlphaVaultReceiptNFT.sol`: ERC-721 vault receipt NFT contract used by the Profile tokenise flow.
 - `docs/submission.md`: hackathon submission copy and demo checklist.
 - `docs/pack-alpha-vercel-deploy.md`: deployment notes.
 

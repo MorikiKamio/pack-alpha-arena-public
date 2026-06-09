@@ -6,9 +6,16 @@ import {
   demoUsdcAbi,
   demoUsdcBytecode,
   packAlphaArenaAbi,
-  packAlphaArenaBytecode
+  packAlphaArenaBytecode,
+  packAlphaVaultReceiptNftAbi,
+  packAlphaVaultReceiptNftBytecode
 } from './packAlphaArenaArtifact.js';
-import { buildPackAlphaRound, getPackAlphaAsset, runNetEdgeRouter } from './packAlphaEngine.js';
+import {
+  buildPackAlphaRound,
+  getPackAlphaAsset,
+  getPackAlphaProfileHolding,
+  runNetEdgeRouter
+} from './packAlphaEngine.js';
 
 const fallbackPackAlphaArenaAbi = [
   {
@@ -58,8 +65,25 @@ function readPackAlphaArtifact() {
   }
 }
 
+function readPackAlphaVaultReceiptNftArtifact() {
+  if (process.env.VERCEL === '1') {
+    return null;
+  }
+
+  const artifactPath = path.join(process.cwd(), 'out/PackAlphaVaultReceiptNFT.sol/PackAlphaVaultReceiptNFT.json');
+  try {
+    return JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as {
+      abi?: unknown;
+      bytecode?: { object?: string };
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function getPackAlphaOnchainConfig() {
   const artifact = readPackAlphaArtifact();
+  const receiptNftArtifact = readPackAlphaVaultReceiptNftArtifact();
   return {
     network: {
       chainIdDecimal: 10143,
@@ -74,18 +98,27 @@ export function getPackAlphaOnchainConfig() {
       blockExplorerUrls: ['https://testnet.monadexplorer.com']
     },
     contract: {
-      address: process.env.PACK_ALPHA_ARENA_ADDRESS ?? null,
+      address: envAddress('PACK_ALPHA_ARENA_ADDRESS'),
       abi: artifact?.abi ?? packAlphaArenaAbi ?? fallbackPackAlphaArenaAbi,
       bytecode: artifact?.bytecode?.object ?? packAlphaArenaBytecode,
       commitDecisionSelector: '0x936ba9b9'
     },
     demoUsdc: {
-      address: process.env.PACK_ALPHA_DEMO_USDC_ADDRESS ?? null,
+      address: envAddress('PACK_ALPHA_DEMO_USDC_ADDRESS'),
       name: 'Pack Alpha Demo USDC',
       symbol: 'paUSDC',
       decimals: 6,
       abi: demoUsdcAbi,
       bytecode: demoUsdcBytecode
+    },
+    receiptNft: {
+      address: envAddress('PACK_ALPHA_RECEIPT_NFT_ADDRESS'),
+      name: 'Pack Alpha Vault Receipt',
+      symbol: 'PAVR',
+      abi: receiptNftArtifact?.abi ?? packAlphaVaultReceiptNftAbi,
+      bytecode: receiptNftArtifact?.bytecode?.object ?? packAlphaVaultReceiptNftBytecode,
+      mintReceiptSelector: '0xce46b345',
+      tokenByReceiptHashSelector: '0x047ffab3'
     }
   };
 }
@@ -98,9 +131,73 @@ function hashText(value: string) {
   return keccak256(toHex(value));
 }
 
+function envAddress(key: string) {
+  return process.env[key]?.trim() || null;
+}
+
 function getPackAlphaAbi() {
   const artifact = readPackAlphaArtifact();
   return (artifact?.abi ?? packAlphaArenaAbi ?? fallbackPackAlphaArenaAbi) as Parameters<typeof encodeFunctionData>[0]['abi'];
+}
+
+function getPackAlphaVaultReceiptNftAbi() {
+  const artifact = readPackAlphaVaultReceiptNftArtifact();
+  return (artifact?.abi ?? packAlphaVaultReceiptNftAbi) as Parameters<typeof encodeFunctionData>[0]['abi'];
+}
+
+function base64Json(value: unknown) {
+  return Buffer.from(JSON.stringify(value)).toString('base64');
+}
+
+export function getPackAlphaReceiptMintCalldata(input: {
+  holdingId: string;
+  ownerAddress: string;
+}) {
+  const holding = getPackAlphaProfileHolding(input.holdingId);
+  if (!holding) {
+    return null;
+  }
+
+  if (!/^0x[a-fA-F0-9]{40}$/.test(input.ownerAddress)) {
+    return null;
+  }
+
+  const receiptHash = asBytes32(holding.receiptHash);
+  const tokenMetadata = {
+    name: `Pack Alpha Vault Receipt - ${holding.name}`,
+    description:
+      'NFT receipt for a physical Pokemon card held by Pack Alpha custody. Redeem and listing actions are handled by the Pack Alpha concierge workflow.',
+    image: holding.imageUrl,
+    external_url: 'https://pack-alpha-arena.vercel.app/pack-alpha/profile',
+    attributes: [
+      { trait_type: 'Holding ID', value: holding.holdingId },
+      { trait_type: 'Asset ID', value: holding.assetId },
+      { trait_type: 'Set', value: holding.setName },
+      { trait_type: 'Grade', value: holding.grade },
+      { trait_type: 'Language', value: holding.language },
+      { trait_type: 'Custody Location', value: holding.custodyLocation },
+      { trait_type: 'Vault State', value: holding.vaultState },
+      { trait_type: 'Market Value USD', value: holding.marketValueUsd },
+      { trait_type: 'Receipt Hash', value: `0x${holding.receiptHash}` }
+    ]
+  };
+  const tokenUri = `data:application/json;base64,${base64Json(tokenMetadata)}`;
+  const abi = getPackAlphaVaultReceiptNftAbi();
+
+  return {
+    holdingId: holding.holdingId,
+    assetId: holding.assetId,
+    ownerAddress: input.ownerAddress,
+    receiptHash,
+    tokenUri,
+    tokenMetadata,
+    contract: getPackAlphaOnchainConfig().receiptNft,
+    data: encodeFunctionData({
+      abi,
+      functionName: 'mintReceipt',
+      args: [input.ownerAddress as `0x${string}`, holding.holdingId, holding.assetId, receiptHash, tokenUri]
+    })
+  };
 }
 
 export function getPackAlphaOnchainDemoFlow(options?: { demoUsdcAddress?: string | null }) {

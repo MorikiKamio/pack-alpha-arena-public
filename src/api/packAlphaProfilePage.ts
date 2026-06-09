@@ -682,8 +682,11 @@ export function renderPackAlphaProfilePage() {
               account: null,
               signedIn: false,
               signature: null,
-              message: 'Wallet not connected'
-            }
+              message: 'Wallet not connected',
+              receiptNftAddress: null,
+              latestTxHash: null
+            },
+            onchain: null
           };
 
           const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -715,9 +718,13 @@ export function renderPackAlphaProfilePage() {
 
           function renderWallet() {
             const status = document.getElementById('wallet-status');
-            status.textContent = state.wallet.message || (state.wallet.account
+            const explorer = state.onchain?.network?.blockExplorerUrls?.[0] || 'https://testnet.monadexplorer.com';
+            const txSuffix = state.wallet.latestTxHash
+              ? ' / Tx ' + shortAddress(state.wallet.latestTxHash)
+              : '';
+            status.textContent = (state.wallet.message || (state.wallet.account
               ? (state.wallet.signedIn ? 'Signed ' + shortAddress(state.wallet.account) : 'Connected ' + shortAddress(state.wallet.account))
-              : 'Wallet not connected');
+              : 'Wallet not connected')) + txSuffix;
             document.getElementById('wallet-button').textContent = state.wallet.account ? shortAddress(state.wallet.account) : 'Connect wallet';
             document.getElementById('signin-button').textContent = state.wallet.signedIn ? 'Signed in' : 'Sign in';
           }
@@ -737,6 +744,161 @@ export function renderPackAlphaProfilePage() {
               ? 'Demo wallet connected: ' + shortAddress(demoWalletAddress)
               : 'Connected ' + shortAddress(demoWalletAddress);
             renderWallet();
+          }
+
+          async function loadOnchainConfig() {
+            state.onchain = await fetchJson('/api/pack-alpha/onchain/config');
+            state.wallet.receiptNftAddress =
+              localStorage.getItem('packAlphaReceiptNftAddress') ||
+              state.onchain.receiptNft?.address ||
+              null;
+            renderWallet();
+            return state.onchain;
+          }
+
+          function requireEthereum() {
+            if (!window.ethereum?.request) {
+              throw new Error('Browser wallet required for actual NFT minting.');
+            }
+            return window.ethereum;
+          }
+
+          async function ensureMonadTestnet() {
+            if (!state.onchain) await loadOnchainConfig();
+            const target = state.onchain.network;
+            try {
+              await requireEthereum().request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: target.chainIdHex }]
+              });
+            } catch (error) {
+              if (error?.code === 4902) {
+                await requireEthereum().request({
+                  method: 'wallet_addEthereumChain',
+                  params: [target]
+                });
+                return;
+              }
+              throw error;
+            }
+          }
+
+          async function waitForReceipt(txHash) {
+            const ethereum = requireEthereum();
+            for (let i = 0; i < 36; i += 1) {
+              const receipt = await ethereum.request({
+                method: 'eth_getTransactionReceipt',
+                params: [txHash]
+              });
+              if (receipt) return receipt;
+              await new Promise((resolve) => window.setTimeout(resolve, 2000));
+            }
+            return null;
+          }
+
+          function decodeUint256(hexValue) {
+            if (!hexValue || hexValue === '0x') return 0n;
+            return BigInt(hexValue);
+          }
+
+          async function existingReceiptTokenId(contractAddress, receiptHash) {
+            const selector = state.onchain.receiptNft?.tokenByReceiptHashSelector || '0x047ffab3';
+            const data = selector + receiptHash.replace(/^0x/, '').padStart(64, '0');
+            const result = await requireEthereum().request({
+              method: 'eth_call',
+              params: [{ to: contractAddress, data }, 'latest']
+            });
+            return decodeUint256(result);
+          }
+
+          async function ensureReceiptNftContract() {
+            if (!state.onchain) await loadOnchainConfig();
+            if (state.wallet.receiptNftAddress) {
+              return state.wallet.receiptNftAddress;
+            }
+            if (!state.onchain.receiptNft?.bytecode) {
+              throw new Error('Receipt NFT bytecode missing. Run forge build and redeploy API.');
+            }
+
+            state.wallet.message = 'Deploying vault receipt NFT contract...';
+            renderWallet();
+            const txHash = await requireEthereum().request({
+              method: 'eth_sendTransaction',
+              params: [{
+                from: state.wallet.account,
+                data: state.onchain.receiptNft.bytecode
+              }]
+            });
+            state.wallet.latestTxHash = txHash;
+            renderWallet();
+            const receipt = await waitForReceipt(txHash);
+            if (!receipt?.contractAddress) {
+              throw new Error('Receipt NFT deploy submitted. Wait for the transaction, then retry tokenise.');
+            }
+            state.wallet.receiptNftAddress = receipt.contractAddress;
+            localStorage.setItem('packAlphaReceiptNftAddress', receipt.contractAddress);
+            state.wallet.message = 'Receipt NFT contract deployed ' + shortAddress(receipt.contractAddress);
+            renderWallet();
+            return receipt.contractAddress;
+          }
+
+          async function mintVaultReceiptNft(holding) {
+            if (!state.wallet.account) {
+              await connectWallet({ allowDemoFallback: false });
+            }
+            if (!state.wallet.account || state.wallet.account === demoWalletAddress) {
+              throw new Error('Connect a real wallet to mint the vault receipt NFT.');
+            }
+            if (!state.wallet.signedIn) {
+              await signIn({ allowDemoFallback: false });
+            }
+            await ensureMonadTestnet();
+            const contractAddress = await ensureReceiptNftContract();
+            const mintPayload = await fetchJson('/api/pack-alpha/onchain/receipt-mint', {
+              method: 'POST',
+              body: JSON.stringify({
+                holdingId: holding.holdingId,
+                ownerAddress: state.wallet.account
+              })
+            });
+            const existingTokenId = await existingReceiptTokenId(contractAddress, mintPayload.receiptHash);
+            if (existingTokenId > 0n) {
+              state.wallet.message = 'Vault receipt NFT already minted #' + existingTokenId.toString();
+              renderWallet();
+              return {
+                txHash: null,
+                contractAddress,
+                receiptHash: mintPayload.receiptHash,
+                tokenUri: mintPayload.tokenUri,
+                tokenId: existingTokenId.toString(),
+                alreadyMinted: true
+              };
+            }
+            state.wallet.message = 'Minting vault receipt NFT...';
+            renderWallet();
+            const txHash = await requireEthereum().request({
+              method: 'eth_sendTransaction',
+              params: [{
+                from: state.wallet.account,
+                to: contractAddress,
+                data: mintPayload.data
+              }]
+            });
+            state.wallet.latestTxHash = txHash;
+            renderWallet();
+            const receipt = await waitForReceipt(txHash);
+            if (!receipt) {
+              throw new Error('NFT mint submitted. Wait for the transaction, then refresh.');
+            }
+            state.wallet.message = 'Vault receipt NFT minted ' + shortAddress(txHash);
+            renderWallet();
+            return {
+              txHash,
+              contractAddress,
+              receiptHash: mintPayload.receiptHash,
+              tokenUri: mintPayload.tokenUri,
+              alreadyMinted: false
+            };
           }
 
           function renderHoldings() {
@@ -850,6 +1012,8 @@ export function renderPackAlphaProfilePage() {
                 <span class="kicker">\${ticket.action} / \${ticket.status.replace(/_/g, ' ')}</span>
                 <strong>\${ticket.holdingId.replace('holding-', '').replace(/-/g, ' ')}</strong>
                 <span class="asset-meta">Fee estimate \${money.format(ticket.expectedFeeUsd)} / custody \${ticket.custodyLocation}</span>
+                \${ticket.mintTxHash ? '<span class="asset-meta">NFT minted on Monad / contract ' + shortAddress(ticket.nftContractAddress) + ' / tx ' + shortAddress(ticket.mintTxHash) + '</span>' : ''}
+                \${ticket.alreadyMinted ? '<span class="asset-meta">NFT already minted on Monad / token #' + ticket.tokenId + ' / contract ' + shortAddress(ticket.nftContractAddress) + '</span>' : ''}
                 <code>\${ticket.receiptHash}</code>
                 <div class="step-list">
                   \${ticket.steps.map((step) => \`<span><span>\${step.label}</span><em>\${step.status}</em></span>\`).join('')}
@@ -888,7 +1052,7 @@ export function renderPackAlphaProfilePage() {
             renderAll();
           }
 
-          async function connectWallet() {
+          async function connectWallet(options = { allowDemoFallback: true }) {
             state.wallet.message = 'Connecting wallet...';
             renderWallet();
             if (window.ethereum?.request) {
@@ -902,17 +1066,28 @@ export function renderPackAlphaProfilePage() {
                 renderWallet();
                 return;
               } catch (_error) {
-                useDemoWallet('Wallet unavailable, using demo wallet');
+                if (options.allowDemoFallback) {
+                  useDemoWallet('Wallet unavailable, using demo wallet');
+                } else {
+                  state.wallet.message = 'Wallet connection required for NFT minting.';
+                  renderWallet();
+                }
                 return;
               }
             }
-            useDemoWallet('No browser wallet, using demo wallet');
+            if (options.allowDemoFallback) {
+              useDemoWallet('No browser wallet, using demo wallet');
+            } else {
+              state.wallet.message = 'Browser wallet required for NFT minting.';
+              renderWallet();
+            }
           }
 
-          async function signIn() {
+          async function signIn(options = { allowDemoFallback: true }) {
             if (!state.wallet.account) {
-              await connectWallet();
+              await connectWallet(options);
             }
+            if (!state.wallet.account) return;
             state.wallet.message = 'Signing profile intent...';
             renderWallet();
             const message = 'Pack Alpha profile action approval ' + new Date().toISOString();
@@ -926,9 +1101,19 @@ export function renderPackAlphaProfilePage() {
                   8000
                 );
               } catch (_error) {
+                if (!options.allowDemoFallback) {
+                  state.wallet.message = 'Wallet signature required for NFT minting.';
+                  renderWallet();
+                  return;
+                }
                 state.wallet.signature = 'demo-signature';
               }
             } else {
+              if (!options.allowDemoFallback) {
+                state.wallet.message = 'Browser wallet required for NFT minting.';
+                renderWallet();
+                return;
+              }
               state.wallet.signature = 'demo-signature';
             }
             state.wallet.signedIn = true;
@@ -939,6 +1124,16 @@ export function renderPackAlphaProfilePage() {
           async function createVaultAction(action) {
             const holding = selectedHolding();
             if (!holding) return;
+            let mintResult = null;
+            if (action === 'tokenize') {
+              try {
+                mintResult = await mintVaultReceiptNft(holding);
+              } catch (error) {
+                state.wallet.message = error.message;
+                renderWallet();
+                return;
+              }
+            }
             const ticket = await fetchJson('/api/pack-alpha/vault-actions', {
               method: 'POST',
               body: JSON.stringify({
@@ -948,6 +1143,20 @@ export function renderPackAlphaProfilePage() {
                 signedIn: state.wallet.signedIn
               })
             });
+            if (mintResult) {
+              ticket.status = 'ready_for_onchain_commit';
+              ticket.mintTxHash = mintResult.txHash;
+              ticket.nftContractAddress = mintResult.contractAddress;
+              ticket.tokenId = mintResult.tokenId;
+              ticket.alreadyMinted = mintResult.alreadyMinted;
+              ticket.steps = ticket.steps.map((step) =>
+                step.label === 'Mint NFT-style vault receipt'
+                  ? { ...step, status: 'done' }
+                  : step.label === 'Prepare OpenSea-style listing metadata'
+                    ? { ...step, status: 'active' }
+                    : step
+              );
+            }
             state.profile.actionTickets = [ticket, ...(state.profile.actionTickets || [])];
             renderTickets();
           }
@@ -968,9 +1177,10 @@ export function renderPackAlphaProfilePage() {
             renderTickets();
           }
 
-          document.getElementById('wallet-button').addEventListener('click', connectWallet);
-          document.getElementById('signin-button').addEventListener('click', signIn);
+          document.getElementById('wallet-button').addEventListener('click', () => connectWallet());
+          document.getElementById('signin-button').addEventListener('click', () => signIn());
 
+          loadOnchainConfig().catch(() => {});
           loadProfile().catch((error) => {
             document.getElementById('detail-root').innerHTML = '<p class="asset-meta">' + error.message + '</p>';
           });

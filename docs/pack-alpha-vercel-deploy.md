@@ -9,7 +9,7 @@ The Pack Alpha app is served by the existing Express serverless entrypoint:
 - Onchain config: `/api/pack-alpha/onchain/config`
 - Full onchain flow calldata: `/api/pack-alpha/onchain/demo-flow`
 
-The `PackAlphaArena` ABI and bytecode are embedded in `src/api/packAlphaArenaArtifact.ts`, so Vercel does not need Foundry or the local `out/` directory at runtime.
+The `PackAlphaArena`, `DemoUSDC`, and `PackAlphaVaultReceiptNFT` ABI/bytecode are embedded in `src/api/packAlphaArenaArtifact.ts`, so Vercel does not need Foundry or the local `out/` directory at runtime.
 
 ## Required Environment Variables
 
@@ -18,12 +18,13 @@ For the web app:
 ```text
 PACK_ALPHA_ARENA_ADDRESS=0x...
 PACK_ALPHA_DEMO_USDC_ADDRESS=0x...
+PACK_ALPHA_RECEIPT_NFT_ADDRESS=0x...
 ```
 
 For local deploy scripts only:
 
 ```text
-PRIVATE_KEY=
+PRIVATE_KEY=0x...
 MONAD_TESTNET_RPC_URL=https://testnet-rpc.monad.xyz
 ```
 
@@ -38,12 +39,13 @@ Do not set `PRIVATE_KEY` in Vercel unless a server-side deploy action is intenti
 npm run deploy:pack-alpha:full-flow
 ```
 
-3. Copy the deployed `PACK_ALPHA_ARENA_ADDRESS` and `PACK_ALPHA_DEMO_USDC_ADDRESS` from `.env.local`.
+3. Copy the deployed `PACK_ALPHA_ARENA_ADDRESS`, `PACK_ALPHA_DEMO_USDC_ADDRESS`, and `PACK_ALPHA_RECEIPT_NFT_ADDRESS` from `.env.local`.
 4. Set the same addresses in Vercel:
 
 ```bash
 vercel env add PACK_ALPHA_ARENA_ADDRESS production
 vercel env add PACK_ALPHA_DEMO_USDC_ADDRESS production
+vercel env add PACK_ALPHA_RECEIPT_NFT_ADDRESS production
 ```
 
 5. Deploy the app:
@@ -64,5 +66,5 @@ The Vercel QA script checks:
 
 - `/pack-alpha/app` renders
 - Wallet and full onchain flow buttons are present
-- onchain config returns Monad chain ID, ABI, and bytecode
+- onchain config returns Monad chain ID, ABI, receipt NFT ABI, and bytecode
 - demo-flow returns eight calldata steps

@@ -18,7 +18,11 @@ import {
   runNetEdgeRouter,
   runPackAlphaAgentMode
 } from './api/packAlphaEngine.js';
-import { getPackAlphaOnchainConfig, getPackAlphaOnchainDemoFlow } from './api/packAlphaOnchain.js';
+import {
+  getPackAlphaOnchainConfig,
+  getPackAlphaOnchainDemoFlow,
+  getPackAlphaReceiptMintCalldata
+} from './api/packAlphaOnchain.js';
 
 export function createApp() {
   const app = express();
@@ -172,6 +176,19 @@ export function createApp() {
         ? req.query.demoUsdcAddress
         : null;
     res.json(getPackAlphaOnchainDemoFlow({ demoUsdcAddress }));
+  });
+
+  app.post('/api/pack-alpha/onchain/receipt-mint', express.json(), (req, res) => {
+    const payload = getPackAlphaReceiptMintCalldata({
+      holdingId: typeof req.body?.holdingId === 'string' ? req.body.holdingId : '',
+      ownerAddress: typeof req.body?.ownerAddress === 'string' ? req.body.ownerAddress : ''
+    });
+    if (!payload) {
+      res.status(404).json({ error: 'Pack Alpha receipt mint payload not found' });
+      return;
+    }
+
+    res.json(payload);
   });
 
   return app;

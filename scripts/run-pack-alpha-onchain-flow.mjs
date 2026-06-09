@@ -32,10 +32,10 @@ function upsertEnv(key, value) {
   fs.writeFileSync(envPath, next, { mode: 0o600 });
 }
 
-async function fetchJson(path) {
-  const response = await fetch(`${appBaseUrl}${path}`);
+async function fetchJson(path, options) {
+  const response = await fetch(`${appBaseUrl}${path}`, options);
   if (!response.ok) {
-    throw new Error(`GET ${path} failed: ${response.status}`);
+    throw new Error(`${options?.method ?? 'GET'} ${path} failed: ${response.status}`);
   }
   return response.json();
 }
@@ -68,6 +68,7 @@ if (balance === 0n) {
 const config = await fetchJson('/api/pack-alpha/onchain/config');
 let contractAddress = process.env.PACK_ALPHA_ARENA_ADDRESS || config.contract.address;
 let demoUsdcAddress = process.env.PACK_ALPHA_DEMO_USDC_ADDRESS || config.demoUsdc.address;
+let receiptNftAddress = process.env.PACK_ALPHA_RECEIPT_NFT_ADDRESS || config.receiptNft.address;
 
 if (!contractAddress) {
   if (!config.contract.bytecode) {
@@ -116,6 +117,29 @@ if (!demoUsdcAddress) {
   console.log(`Using Pack Alpha Demo USDC: ${demoUsdcAddress}`);
 }
 
+if (!receiptNftAddress) {
+  if (!config.receiptNft.bytecode) {
+    throw new Error('PackAlphaVaultReceiptNFT bytecode missing. Run forge build first.');
+  }
+
+  console.log('Deploying Pack Alpha Vault Receipt NFT...');
+  const receiptNftDeployHash = await walletClient.deployContract({
+    abi: config.receiptNft.abi,
+    bytecode: config.receiptNft.bytecode,
+    account
+  });
+  console.log(`Receipt NFT deploy tx: ${receiptNftDeployHash}`);
+  const receiptNftReceipt = await publicClient.waitForTransactionReceipt({ hash: receiptNftDeployHash });
+  receiptNftAddress = receiptNftReceipt.contractAddress;
+  if (!receiptNftAddress) {
+    throw new Error('Receipt NFT deploy receipt did not include contractAddress');
+  }
+  upsertEnv('PACK_ALPHA_RECEIPT_NFT_ADDRESS', receiptNftAddress);
+  console.log(`Pack Alpha Vault Receipt NFT deployed: ${receiptNftAddress}`);
+} else {
+  console.log(`Using Pack Alpha Vault Receipt NFT: ${receiptNftAddress}`);
+}
+
 const tokenBalance = await publicClient.readContract({
   address: demoUsdcAddress,
   abi: config.demoUsdc.abi,
@@ -145,6 +169,54 @@ for (const step of flow.steps) {
   console.log(`  ${hash} (${receipt.status})`);
 }
 
+const mintPayload = await fetchJson('/api/pack-alpha/onchain/receipt-mint', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    holdingId: 'holding-pikachu-greyfelt-psa10',
+    ownerAddress: account.address
+  })
+});
+
+const existingTokenId = await publicClient.readContract({
+  address: receiptNftAddress,
+  abi: config.receiptNft.abi,
+  functionName: 'tokenByReceiptHash',
+  args: [mintPayload.receiptHash]
+});
+
+if (existingTokenId > 0n) {
+  console.log(`Vault receipt NFT already minted as token #${existingTokenId.toString()}`);
+  txs.push({
+    id: 'vault-receipt-nft-mint',
+    functionName: 'mintReceipt',
+    hash: null,
+    blockNumber: null,
+    status: 'already_minted',
+    tokenId: existingTokenId.toString(),
+    contractAddress: receiptNftAddress,
+    receiptHash: mintPayload.receiptHash
+  });
+} else {
+  console.log(`Minting vault receipt NFT (${mintPayload.holdingId})...`);
+  const mintHash = await walletClient.sendTransaction({
+    account,
+    to: receiptNftAddress,
+    data: mintPayload.data
+  });
+  const mintReceipt = await publicClient.waitForTransactionReceipt({ hash: mintHash });
+  txs.push({
+    id: 'vault-receipt-nft-mint',
+    functionName: 'mintReceipt',
+    hash: mintHash,
+    blockNumber: mintReceipt.blockNumber.toString(),
+    status: mintReceipt.status,
+    contractAddress: receiptNftAddress,
+    receiptHash: mintPayload.receiptHash
+  });
+  console.log(`  ${mintHash} (${mintReceipt.status})`);
+}
+
 fs.mkdirSync('tmp', { recursive: true });
 fs.writeFileSync(
   'tmp/pack-alpha-onchain-flow.json',
@@ -154,6 +226,7 @@ fs.writeFileSync(
       account: account.address,
       contractAddress,
       demoUsdcAddress,
+      receiptNftAddress,
       roundId: flow.roundId,
       settlementToken: flow.settlementToken,
       txs
